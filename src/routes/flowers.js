@@ -1,0 +1,10 @@
+const express = require('express');
+const router = express.Router();
+const { authMiddleware, adminMiddleware } = require('../middlewares/auth');
+const { getAllFlowers, getFlowerById, createFlower, updateFlower, deleteFlower } = require('../controllers/flowers');
+router.get('/', getAllFlowers);
+router.get('/:id', getFlowerById);
+router.post('/', authMiddleware, adminMiddleware, createFlower);
+router.put('/:id', authMiddleware, adminMiddleware, updateFlower);
+router.delete('/:id', authMiddleware, adminMiddleware, deleteFlower);
+module.exports = router;
