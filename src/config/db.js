@@ -1,26 +1,27 @@
-const { Pool } = require('pg');
-const dotenv = require('dotenv');
+const { Sequelize } = require('sequelize');
+require('dotenv').config();
 
-dotenv.config();
+const debugSequelize = process.env.NODE_ENV !== 'production';
 
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-});
+const sequelize = new Sequelize(
+  process.env.DB_NAME,
+  process.env.DB_USER,
+  process.env.DB_PASSWORD,
+  {
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    dialect: 'postgres',
+    define: {
+      underscored: true,
+      timestamps: true
+    },
+    logging: debugSequelize ? console.log : false,
+    dialectOptions: {
+      useUTC: false
+    },
+    timezone: '+00:00',
+    quoteIdentifiers: false
+  }
+);
 
-pool.on('connect', () => {
-  console.log('Connected to the database');
-});
-
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
-  process.exit(-1);
-});
-
-module.exports = {
-  query: (text, params) => pool.query(text, params),
-  pool
-}; 
+module.exports = sequelize; 

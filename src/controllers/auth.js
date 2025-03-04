@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
+const { User } = require('../models');
 
 /**
  * Регистрация нового пользователя
@@ -49,48 +50,89 @@ const register = async (req, res) => {
 };
 
 /**
+ * Вспомогательная функция для генерации токена
+ */
+const generateToken = (user) => {
+  return jwt.sign(
+    { 
+      id: user.id, 
+      is_admin: user.is_admin,
+      telegram_id: user.telegram_id 
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+  );
+};
+
+/**
  * Аутентификация пользователя
  */
 const login = async (req, res) => {
   try {
+    console.log('Попытка входа пользователя:', req.body.email);
     const { email, password } = req.body;
     
-    // Проверка обязательных полей
+    // Проверяем входные данные
     if (!email || !password) {
-      return res.status(400).json({ message: 'Email и пароль обязательны' });
+      return res.status(400).json({
+        error: 'Пожалуйста, введите email и пароль',
+        data: null
+      });
     }
     
-    // Поиск пользователя по email
-    const { rows } = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+    // Убедимся что User - это действительно модель Sequelize
+    console.log('Проверка модели User:', typeof User, User.prototype);
     
-    if (rows.length === 0) {
-      return res.status(401).json({ message: 'Неверный email или пароль' });
+    // Ищем пользователя по email
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
+      return res.status(401).json({
+        error: 'Неверный email или пароль',
+        data: null
+      });
     }
     
-    const user = rows[0];
-    
-    // Проверка пароля
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    
-    if (!isPasswordValid) {
-      return res.status(401).json({ message: 'Неверный email или пароль' });
+    // Проверяем пароль
+    const isValid = await bcrypt.compare(password, user.password_hash);
+    if (!isValid) {
+      return res.status(401).json({
+        error: 'Неверный email или пароль',
+        data: null
+      });
     }
     
-    // Генерация JWT токена
-    const token = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN
-    });
+    // Генерируем JWT токен
+    const token = jwt.sign(
+      { 
+        id: user.id, 
+        is_admin: user.is_admin
+      },
+      process.env.JWT_SECRET || 'secret_key_change_in_production',
+      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    );
     
-    // Отправляем данные пользователя без пароля
-    const { password: _, ...userWithoutPassword } = user;
-    
-    return res.status(200).json({
-      user: userWithoutPassword,
-      token
+    // Возвращаем данные пользователя и токен
+    res.json({
+      data: {
+        user: {
+          id: user.id,
+          name: user.getName ? user.getName() : 
+                (user.first_name || user.last_name) ? 
+                  `${user.first_name || ''} ${user.last_name || ''}`.trim() : 
+                  user.username || user.email,
+          email: user.email,
+          is_admin: user.is_admin
+        },
+        token
+      },
+      error: null
     });
   } catch (error) {
-    console.error('Error logging in:', error);
-    return res.status(500).json({ message: 'Ошибка при входе в систему' });
+    console.error('Ошибка входа:', error);
+    res.status(500).json({
+      error: 'Внутренняя ошибка сервера: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -180,7 +222,7 @@ const updateProfile = async (req, res) => {
  */
 const verifyTelegram = async (req, res) => {
   try {
-    const { telegram_id, telegram_username, initData } = req.body;
+    const { telegram_id, telegram_username, initData, user_data } = req.body;
     
     if (!telegram_id || !initData) {
       return res.status(400).json({ message: 'Отсутствуют обязательные параметры' });
@@ -189,6 +231,7 @@ const verifyTelegram = async (req, res) => {
     // Проверка инициализационных данных Telegram
     // В реальном приложении здесь должна быть проверка подписи initData
     // https://core.telegram.org/bots/webapps#validating-data-received-via-the-web-app
+    // Валидация подписи initData должна быть реализована в рабочей версии!
     
     let userId = null;
     let user = null;
@@ -226,13 +269,43 @@ const verifyTelegram = async (req, res) => {
       if (!userId) {
         const telegramUser = telegramCheck.rows[0];
         
+        // Обновляем информацию пользователя, если она изменилась в Telegram
+        if (user_data && (telegram_username !== telegramUser.name || 
+            (user_data.first_name && !telegramUser.first_name) || 
+            (user_data.last_name && !telegramUser.last_name))) {
+          
+          // Создаем имя из first_name и last_name, если они есть
+          const fullName = user_data.first_name && user_data.last_name 
+            ? `${user_data.first_name} ${user_data.last_name}`
+            : telegram_username || `User_${telegram_id}`;
+            
+          await db.query(
+            `UPDATE users 
+             SET name = $1, 
+                 first_name = $2, 
+                 last_name = $3, 
+                 username = $4,
+                 updated_at = NOW()
+             WHERE id = $5`,
+            [fullName, user_data.first_name || null, user_data.last_name || null, telegram_username || null, telegramUser.id]
+          );
+        }
+        
+        // Получаем обновленные данные пользователя
+        const updatedUserResult = await db.query(
+          'SELECT * FROM users WHERE id = $1',
+          [telegramUser.id]
+        );
+        
+        const updatedUser = updatedUserResult.rows[0];
+        
         // Генерация JWT токена
-        const token = jwt.sign({ id: telegramUser.id }, process.env.JWT_SECRET, {
+        const token = jwt.sign({ id: updatedUser.id }, process.env.JWT_SECRET, {
           expiresIn: process.env.JWT_EXPIRES_IN
         });
         
         // Отправляем данные пользователя без пароля
-        const { password: _, ...userWithoutPassword } = telegramUser;
+        const { password: _, ...userWithoutPassword } = updatedUser;
         
         return res.status(200).json({
           user: userWithoutPassword,
@@ -246,10 +319,20 @@ const verifyTelegram = async (req, res) => {
     if (userId && user) {
       const { rows } = await db.query(
         `UPDATE users 
-         SET telegram_id = $1
-         WHERE id = $2
-         RETURNING id, name, email, phone, address, telegram_id, is_admin, created_at`,
-        [telegram_id, userId]
+         SET telegram_id = $1,
+             username = $2,
+             first_name = $3,
+             last_name = $4,
+             updated_at = NOW()
+         WHERE id = $5
+         RETURNING id, name, email, phone, address, telegram_id, username, first_name, last_name, is_admin, created_at`,
+        [
+          telegram_id, 
+          telegram_username || null, 
+          user_data?.first_name || null, 
+          user_data?.last_name || null, 
+          userId
+        ]
       );
       
       return res.status(200).json({
@@ -260,11 +343,29 @@ const verifyTelegram = async (req, res) => {
     
     // Если пользователь не авторизован и Telegram ID не найден, 
     // создаем новый аккаунт через Telegram
+    const fullName = user_data?.first_name && user_data?.last_name 
+      ? `${user_data.first_name} ${user_data.last_name}`
+      : telegram_username || `User_${telegram_id}`;
+      
     const { rows } = await db.query(
-      `INSERT INTO users (name, telegram_id, is_admin)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, email, phone, address, telegram_id, is_admin, created_at`,
-      [telegram_username || `User_${telegram_id}`, telegram_id, false]
+      `INSERT INTO users (
+        name, 
+        telegram_id, 
+        username, 
+        first_name, 
+        last_name,
+        is_admin
+      )
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, name, email, phone, address, telegram_id, username, first_name, last_name, is_admin, created_at`,
+      [
+        fullName,
+        telegram_id,
+        telegram_username || null,
+        user_data?.first_name || null,
+        user_data?.last_name || null,
+        false
+      ]
     );
     
     // Генерация JWT токена
@@ -275,11 +376,127 @@ const verifyTelegram = async (req, res) => {
     return res.status(201).json({
       user: rows[0],
       token,
-      telegramLinked: true
+      telegramLinked: true,
+      created: true
     });
   } catch (error) {
     console.error('Error verifying Telegram:', error);
     return res.status(500).json({ message: 'Ошибка при верификации Telegram' });
+  }
+};
+
+/**
+ * Выход пользователя
+ */
+const logout = (req, res) => {
+  res.clearCookie('token');
+  res.json({ 
+    data: { success: true },
+    error: null 
+  });
+};
+
+/**
+ * Проверка сессии пользователя
+ */
+const checkSession = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['id', 'name', 'email', 'isAdmin']
+    });
+    
+    if (!user) {
+      return res.status(404).json({
+        error: 'Пользователь не найден',
+        data: null
+      });
+    }
+    
+    res.json({
+      data: { user },
+      error: null
+    });
+    
+  } catch (error) {
+    console.error('Ошибка проверки сессии:', error);
+    res.status(500).json({
+      error: 'Ошибка сервера',
+      data: null
+    });
+  }
+};
+
+/**
+ * Получение профиля пользователя
+ */
+const getProfile = async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id, {
+      attributes: { exclude: ['password_hash'] }
+    });
+    
+    if (!user) {
+      return res.status(404).json({
+        error: 'Пользователь не найден',
+        data: null
+      });
+    }
+    
+    res.json({
+      data: {
+        user: user.toJSON()
+      },
+      error: null
+    });
+  } catch (error) {
+    console.error('Ошибка получения профиля:', error);
+    res.status(500).json({
+      error: 'Внутренняя ошибка сервера',
+      data: null
+    });
+  }
+};
+
+/**
+ * Обновление токена
+ */
+const refreshToken = async (req, res) => {
+  try {
+    // Получаем ID пользователя из JWT
+    const { id } = req.user;
+    
+    // Находим пользователя в базе
+    const user = await User.findByPk(id);
+    
+    if (!user) {
+      return res.status(404).json({
+        error: 'Пользователь не найден',
+        data: null
+      });
+    }
+    
+    // Генерируем новый токен
+    const token = user.generateToken();
+    
+    // Отправляем токен клиенту
+    res.json({
+      data: {
+        user: {
+          id: user.id,
+          name: user.name || user.first_name + ' ' + user.last_name,
+          email: user.email,
+          is_admin: user.is_admin
+        },
+        token
+      },
+      error: null
+    });
+  } catch (error) {
+    console.error('Ошибка обновления токена:', error);
+    res.status(500).json({
+      error: 'Внутренняя ошибка сервера',
+      data: null
+    });
   }
 };
 
@@ -288,5 +505,9 @@ module.exports = {
   login,
   getMe,
   updateProfile,
-  verifyTelegram
+  verifyTelegram,
+  logout,
+  checkSession,
+  getProfile,
+  refreshToken
 };

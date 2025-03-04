@@ -1,48 +1,66 @@
 const jwt = require('jsonwebtoken');
-const db = require('../config/db');
+const { User } = require('../models');
 
 // Middleware для проверки JWT токена
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   try {
-    // Получаем токен из заголовка
+    // Проверяем наличие токена в заголовке
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ message: 'Не авторизован, требуется токен' });
+      return res.status(401).json({
+        error: 'Не авторизован',
+        data: null
+      });
     }
 
+    // Извлекаем токен из заголовка
     const token = authHeader.split(' ')[1];
-
-    // Верифицируем токен
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decoded;
+    
+    // Проверяем токен
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_key_change_in_production');
+    
+    // Находим пользователя
+    const user = await User.findByPk(decoded.id);
+    if (!user) {
+      return res.status(401).json({
+        error: 'Не найден пользователь с таким токеном',
+        data: null
+      });
+    }
+    
+    // Добавляем пользователя к запросу
+    req.user = user;
     next();
   } catch (error) {
-    return res.status(401).json({ message: 'Не авторизован, неверный токен' });
+    console.error('Ошибка авторизации:', error);
+    return res.status(401).json({
+      error: 'Недействительный токен авторизации',
+      data: null
+    });
   }
 };
 
 // Middleware для проверки прав администратора
-const adminMiddleware = async (req, res, next) => {
-  try {
-    const userId = req.user.id;
-    
-    // Проверяем, является ли пользователь администратором
-    const { rows } = await db.query(
-      'SELECT is_admin FROM users WHERE id = $1',
-      [userId]
-    );
-
-    if (rows.length === 0 || !rows[0].is_admin) {
-      return res.status(403).json({ message: 'Доступ запрещен, требуются права администратора' });
-    }
-
-    next();
-  } catch (error) {
-    return res.status(500).json({ message: 'Ошибка сервера' });
+const adminMiddleware = (req, res, next) => {
+  if (!req.user || !req.user.is_admin) {
+    return res.status(403).json({
+      error: 'Доступ запрещен. Требуются права администратора',
+      data: null
+    });
   }
+  next();
+};
+
+// Добавляем после authMiddleware
+const adminCheck = (req, res, next) => {
+  if (!req.user.isAdmin) {
+    console.warn('Admin access denied for user:', req.user.id);
+    return res.status(403).json({ error: 'Доступ запрещен' });
+  }
+  next();
 };
 
 module.exports = {
   authMiddleware,
-  adminMiddleware
+  adminMiddleware: adminCheck // Переименовываем для ясности
 }; 

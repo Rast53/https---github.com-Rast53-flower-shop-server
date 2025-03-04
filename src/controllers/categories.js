@@ -1,18 +1,37 @@
 const db = require('../config/db');
+const { category: Category, flower: Flower } = require('../models');
 
 /**
  * Получение всех категорий
  */
-const getAllCategories = async (req, res) => {
+const getCategories = async (req, res) => {
   try {
-    const { rows } = await db.query(
-      'SELECT * FROM categories ORDER BY name ASC'
-    );
+    console.log('Запрос на получение категорий');
     
-    return res.status(200).json(rows);
+    // Логируем доступные атрибуты модели
+    const attributes = Object.keys(Category.rawAttributes);
+    console.log('Доступные атрибуты категорий:', attributes);
+    
+    // Получаем все категории с их связанными цветами
+    const categories = await Category.findAll({
+      attributes: ['id', 'name', 'slug', 'description', 'image_url', 'created_at', 'updated_at'],
+      include: [{
+        model: Flower,
+        as: 'flowers',
+        attributes: ['id', 'name', 'price', 'image_url', 'popularity'] // Вернули popularity
+      }]
+    });
+    
+    res.json({
+      data: categories,
+      error: null
+    });
   } catch (error) {
-    console.error('Error getting categories:', error);
-    return res.status(500).json({ message: 'Ошибка при получении категорий' });
+    console.error('Ошибка при получении категорий:', error);
+    res.status(500).json({
+      error: 'Ошибка сервера: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -21,32 +40,34 @@ const getAllCategories = async (req, res) => {
  */
 const getCategoryById = async (req, res) => {
   try {
-    const { id } = req.params;
+    const categoryId = req.params.id;
     
-    const { rows } = await db.query(
-      'SELECT * FROM categories WHERE id = $1',
-      [id]
-    );
+    // Ищем категорию по ID
+    const category = await Category.findByPk(categoryId, {
+      include: [{
+        model: Flower,
+        as: 'flowers',
+        attributes: ['id', 'name', 'price', 'image_url', 'description', 'popularity', 'stock_quantity']
+      }]
+    });
     
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Категория не найдена' });
+    if (!category) {
+      return res.status(404).json({
+        error: 'Категория не найдена',
+        data: null
+      });
     }
     
-    // Получаем также все цветы в этой категории
-    const flowersResult = await db.query(
-      'SELECT * FROM flowers WHERE category_id = $1 ORDER BY name ASC',
-      [id]
-    );
-    
-    const result = {
-      ...rows[0],
-      flowers: flowersResult.rows
-    };
-    
-    return res.status(200).json(result);
+    res.json({
+      data: category,
+      error: null
+    });
   } catch (error) {
-    console.error('Error getting category by ID:', error);
-    return res.status(500).json({ message: 'Ошибка при получении категории' });
+    console.error('Ошибка при получении категории:', error);
+    res.status(500).json({
+      error: 'Ошибка сервера: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -160,7 +181,7 @@ const deleteCategory = async (req, res) => {
 };
 
 module.exports = {
-  getAllCategories,
+  getCategories,
   getCategoryById,
   createCategory,
   updateCategory,

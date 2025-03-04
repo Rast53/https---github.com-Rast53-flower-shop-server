@@ -43,3 +43,6 @@ coverage/
 # temp directories
 tmp/
 temp/ 
+
+*.sql
+*.tar
