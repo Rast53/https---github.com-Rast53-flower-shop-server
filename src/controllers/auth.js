@@ -115,7 +115,7 @@ const login = async (req, res) => {
         user: {
           id: user.id,
           email: user.email,
-          is_admin: user.is_admin,
+          is_admin: Boolean(user.is_admin),
           name: name
         }
       },
@@ -131,27 +131,108 @@ const login = async (req, res) => {
 };
 
 /**
- * Получение данных текущего пользователя
+ * Проверка сессии пользователя
  */
-const getMe = async (req, res) => {
+const checkSession = async (req, res) => {
   try {
-    const userId = req.user.id;
+    console.log('Запрос на проверку сессии:', {
+      headers: req.headers,
+      user: req.user || 'не определен'
+    });
     
-    const { rows } = await db.query(
-      'SELECT id, name, email, phone, address, telegram_id, is_admin, created_at FROM users WHERE id = $1',
-      [userId]
-    );
-    
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Пользователь не найден' });
+    // Проверяем заголовок авторизации напрямую, если middleware не сработал
+    if (!req.user) {
+      const authHeader = req.headers.authorization;
+      
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        console.log('Заголовок авторизации отсутствует или некорректен');
+        return res.status(401).json({
+          error: 'Пользователь не авторизован',
+          data: null
+        });
+      }
+      
+      try {
+        const token = authHeader.split(' ')[1];
+        console.log('Пробуем декодировать токен напрямую');
+        
+        // Проверяем токен
+        const decoded = jwt.verify(token, JWT_SECRET);
+        console.log('Токен успешно декодирован:', decoded);
+        
+        // Проверяем доступные модели
+        console.log('Доступные модели:', Object.keys(require('../models')));
+        
+        // Находим пользователя в базе данных
+        const user = await User.findByPk(decoded.id);
+        console.log('Пользователь найден:', !!user);
+        
+        if (!user) {
+          return res.status(401).json({
+            error: 'Пользователь не найден или заблокирован',
+            data: null
+          });
+        }
+        
+        // Возвращаем данные пользователя
+        return res.json({
+          data: { 
+            user: {
+              id: user.id,
+              name: getUserName(user),
+              email: user.email,
+              telegram_id: user.telegram_id,
+              username: user.username,
+              first_name: user.first_name,
+              last_name: user.last_name,
+              is_admin: Boolean(user.is_admin)
+            }
+          },
+          error: null
+        });
+      } catch (error) {
+        console.error('Ошибка при проверке токена:', error);
+        return res.status(401).json({
+          error: 'Неверный токен авторизации',
+          data: null
+        });
+      }
     }
     
-    return res.status(200).json(rows[0]);
+    // Стандартная обработка, если middleware добавил req.user
+    console.log('Ищем пользователя по ID:', req.user.id);
+    const user = await User.findByPk(req.user.id, {
+      attributes: ['id', 'name', 'email', 'username', 'first_name', 'last_name', 'telegram_id', 'is_admin']
+    });
+    
+    if (!user) {
+      console.log('Пользователь не найден в базе данных');
+      return res.status(404).json({
+        error: 'Пользователь не найден',
+        data: null
+      });
+    }
+    
+    console.log('Пользователь найден, отправляем данные');
+    res.json({
+      data: { user },
+      error: null
+    });
+    
   } catch (error) {
-    console.error('Error getting user:', error);
-    return res.status(500).json({ message: 'Ошибка при получении данных пользователя' });
+    console.error('Ошибка проверки сессии:', error);
+    console.error('Стек ошибки:', error.stack);
+    res.status(500).json({
+      error: 'Ошибка сервера: ' + error.message,
+      data: null
+    });
   }
 };
+
+/**
+ * Получение данных о текущем пользователе
+ */
+const getMe = checkSession; // Используем тот же метод для /me
 
 /**
  * Обновление данных пользователя
@@ -302,7 +383,13 @@ const verifyTelegram = async (req, res) => {
         const { password: _, ...userWithoutPassword } = updatedUser;
         
         return res.status(200).json({
-          user: userWithoutPassword,
+          user: {
+            id: updatedUser.id,
+            name: getUserName(updatedUser),
+            email: updatedUser.email,
+            is_admin: Boolean(updatedUser.is_admin),
+            telegram_id: updatedUser.telegram_id
+          },
           token,
           telegramLinked: true
         });
@@ -330,7 +417,13 @@ const verifyTelegram = async (req, res) => {
       );
       
       return res.status(200).json({
-        user: rows[0],
+        user: {
+          id: rows[0].id,
+          name: getUserName(rows[0]),
+          email: rows[0].email,
+          is_admin: Boolean(rows[0].is_admin),
+          telegram_id: rows[0].telegram_id
+        },
         telegramLinked: true
       });
     }
@@ -368,7 +461,13 @@ const verifyTelegram = async (req, res) => {
     });
     
     return res.status(201).json({
-      user: rows[0],
+      user: {
+        id: rows[0].id,
+        name: getUserName(rows[0]),
+        email: rows[0].email,
+        is_admin: Boolean(rows[0].is_admin),
+        telegram_id: rows[0].telegram_id
+      },
       token,
       telegramLinked: true,
       created: true
@@ -388,44 +487,6 @@ const logout = (req, res) => {
     data: { success: true },
     error: null 
   });
-};
-
-/**
- * Проверка сессии пользователя
- */
-const checkSession = async (req, res) => {
-  try {
-    // Проверяем, что req.user существует
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({
-        error: 'Пользователь не авторизован',
-        data: null
-      });
-    }
-    
-    const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'name', 'email', 'username', 'first_name', 'last_name', 'telegram_id', 'is_admin']
-    });
-    
-    if (!user) {
-      return res.status(404).json({
-        error: 'Пользователь не найден',
-        data: null
-      });
-    }
-    
-    res.json({
-      data: { user },
-      error: null
-    });
-    
-  } catch (error) {
-    console.error('Ошибка проверки сессии:', error);
-    res.status(500).json({
-      error: 'Ошибка сервера',
-      data: null
-    });
-  }
 };
 
 /**
@@ -485,7 +546,7 @@ const refreshToken = async (req, res) => {
       data: {
         user: {
           id: user.id,
-          name: user.name || user.first_name + ' ' + user.last_name,
+          name: getUserName(user),
           email: user.email,
           is_admin: user.is_admin
         },
@@ -522,9 +583,12 @@ const getUserName = (user) => {
  */
 const telegramAuth = async (req, res) => {
   try {
-    const { telegram_id, username, first_name, last_name } = req.body;
+    console.log('Получен запрос на авторизацию через Telegram:', req.body);
+    
+    const { telegram_id, username, first_name, last_name, initData } = req.body;
     
     if (!telegram_id) {
+      console.error('Отсутствует идентификатор Telegram в запросе');
       return res.status(400).json({ 
         error: 'Отсутствует идентификатор Telegram',
         data: null
@@ -533,12 +597,24 @@ const telegramAuth = async (req, res) => {
     
     // Преобразуем telegram_id в строку, если он передан как число
     const telegramIdString = String(telegram_id);
+    console.log('Ищем пользователя по Telegram ID:', telegramIdString);
+    
+    // Проверяем доступные модели
+    console.log('Доступные модели:', Object.keys(require('../models')));
+    console.log('Модель User доступна:', !!User);
     
     // Ищем пользователя по идентификатору Telegram
     let user = await User.findOne({ where: { telegram_id: telegramIdString } });
+    console.log('Результат поиска пользователя:', user ? 'Найден' : 'Не найден');
     
     // Если пользователь не найден, создаем нового
     if (!user) {
+      console.log('Создаем нового пользователя с данными:', { 
+        telegram_id: telegramIdString, 
+        username, 
+        first_name, 
+        last_name 
+      });
       const randomPassword = crypto.randomBytes(16).toString('hex');
       
       user = await User.create({
@@ -581,22 +657,39 @@ const telegramAuth = async (req, res) => {
       { expiresIn: JWT_EXPIRES_IN }
     );
     
+    console.log('Сгенерирован JWT токен для пользователя:', {
+      userId: user.id,
+      telegramId: user.telegram_id,
+      isAdmin: user.is_admin,
+      tokenLength: token.length
+    });
+    
     // Возвращаем данные пользователя и токен в едином формате
-    res.status(200).json({
+    const responseData = {
       data: {
         user: {
           id: user.id,
-          name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.username || 'Пользователь Telegram',
-          username: user.username,
-          telegram_id: user.telegram_id,
-          is_admin: user.is_admin
+          name: getUserName(user),
+          email: user.email,
+          is_admin: Boolean(user.is_admin),
+          telegram_id: user.telegram_id
         },
         token
       },
       error: null
+    };
+    
+    console.log('Отправляем ответ с данными пользователя:', {
+      userId: responseData.data.user.id,
+      telegramId: responseData.data.user.telegram_id,
+      isAdmin: responseData.data.user.is_admin,
+      hasToken: !!responseData.data.token
     });
+    
+    res.status(200).json(responseData);
   } catch (error) {
     console.error('Ошибка при авторизации через Telegram:', error);
+    console.error('Стек ошибки:', error.stack);
     res.status(500).json({ 
       error: 'Ошибка сервера при авторизации через Telegram: ' + error.message,
       data: null

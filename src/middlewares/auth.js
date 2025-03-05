@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
-const { User } = require('../models');
+const models = require('../models');
+const User = models.user;
 const JWT_SECRET = process.env.JWT_SECRET || 'secret_key_change_in_production';
 
 /**
@@ -21,6 +22,18 @@ const authMiddleware = async (req, res, next) => {
     
     // Проверяем токен
     const decoded = jwt.verify(token, JWT_SECRET);
+    
+    // Добавляем отладочную информацию
+    console.log('Доступные модели:', Object.keys(models));
+    console.log('Ищем пользователя с ID:', decoded.id);
+    
+    if (!User) {
+      console.error('Модель User не определена');
+      return res.status(500).json({
+        error: 'Внутренняя ошибка сервера: модель User не определена',
+        data: null
+      });
+    }
     
     // Находим пользователя в базе данных
     const user = await User.findByPk(decoded.id);
@@ -58,6 +71,7 @@ const authMiddleware = async (req, res, next) => {
  */
 const adminMiddleware = (req, res, next) => {
   if (!req.user || !req.user.is_admin) {
+    console.warn('Admin access denied for user:', req.user ? req.user.id : 'unknown');
     return res.status(403).json({ 
       error: 'Доступ запрещен. Требуются права администратора', 
       data: null 
@@ -67,16 +81,7 @@ const adminMiddleware = (req, res, next) => {
   next();
 };
 
-// Добавляем после authMiddleware
-const adminCheck = (req, res, next) => {
-  if (!req.user.isAdmin) {
-    console.warn('Admin access denied for user:', req.user.id);
-    return res.status(403).json({ error: 'Доступ запрещен' });
-  }
-  next();
-};
-
 module.exports = {
   authMiddleware,
-  adminMiddleware: adminCheck
+  adminMiddleware
 }; 

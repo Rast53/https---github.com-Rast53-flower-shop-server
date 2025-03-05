@@ -26,7 +26,7 @@ router.post('/logout', logout);
 router.post('/verify-telegram', verifyTelegram);
 
 // Маршруты для аутентифицированных пользователей
-router.get('/me', checkSession);
+router.get('/me', getMe);
 router.put('/me', authMiddleware, updateProfile);
 router.get('/profile', authMiddleware, getProfile);
 router.post('/refresh-token', refreshToken);
