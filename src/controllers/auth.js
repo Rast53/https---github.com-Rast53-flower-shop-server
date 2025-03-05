@@ -2,6 +2,10 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
 const { user: User } = require('../models');
+const crypto = require('crypto');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'secret_key_change_in_production';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 /**
  * Регистрация нового пользователя
@@ -35,8 +39,8 @@ const register = async (req, res) => {
     );
     
     // Генерация JWT токена
-    const token = jwt.sign({ id: rows[0].id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN
+    const token = jwt.sign({ id: rows[0].id }, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN
     });
     
     return res.status(201).json({
@@ -59,8 +63,8 @@ const generateToken = (user) => {
       is_admin: user.is_admin,
       telegram_id: user.telegram_id 
     },
-    process.env.JWT_SECRET || 'secret_key_change_in_production',
-    { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
   );
 };
 
@@ -230,7 +234,7 @@ const verifyTelegram = async (req, res) => {
     if (req.headers.authorization) {
       try {
         const token = req.headers.authorization.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        const decoded = jwt.verify(token, JWT_SECRET);
         userId = decoded.id;
         
         // Проверяем, что пользователь существует
@@ -290,8 +294,8 @@ const verifyTelegram = async (req, res) => {
         const updatedUser = updatedUserResult.rows[0];
         
         // Генерация JWT токена
-        const token = jwt.sign({ id: updatedUser.id }, process.env.JWT_SECRET, {
-          expiresIn: process.env.JWT_EXPIRES_IN
+        const token = jwt.sign({ id: updatedUser.id }, JWT_SECRET, {
+          expiresIn: JWT_EXPIRES_IN
         });
         
         // Отправляем данные пользователя без пароля
@@ -359,8 +363,8 @@ const verifyTelegram = async (req, res) => {
     );
     
     // Генерация JWT токена
-    const token = jwt.sign({ id: rows[0].id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN
+    const token = jwt.sign({ id: rows[0].id }, JWT_SECRET, {
+      expiresIn: JWT_EXPIRES_IN
     });
     
     return res.status(201).json({
@@ -391,8 +395,16 @@ const logout = (req, res) => {
  */
 const checkSession = async (req, res) => {
   try {
+    // Проверяем, что req.user существует
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({
+        error: 'Пользователь не авторизован',
+        data: null
+      });
+    }
+    
     const user = await User.findByPk(req.user.id, {
-      attributes: ['id', 'name', 'email', 'isAdmin']
+      attributes: ['id', 'name', 'email', 'username', 'first_name', 'last_name', 'telegram_id', 'is_admin']
     });
     
     if (!user) {
@@ -505,6 +517,93 @@ const getUserName = (user) => {
   return user.username || user.email || `User-${user.id}`;
 };
 
+/**
+ * Авторизация через Telegram
+ */
+const telegramAuth = async (req, res) => {
+  try {
+    const { telegram_id, username, first_name, last_name } = req.body;
+    
+    if (!telegram_id) {
+      return res.status(400).json({ 
+        error: 'Отсутствует идентификатор Telegram',
+        data: null
+      });
+    }
+    
+    // Преобразуем telegram_id в строку, если он передан как число
+    const telegramIdString = String(telegram_id);
+    
+    // Ищем пользователя по идентификатору Telegram
+    let user = await User.findOne({ where: { telegram_id: telegramIdString } });
+    
+    // Если пользователь не найден, создаем нового
+    if (!user) {
+      const randomPassword = crypto.randomBytes(16).toString('hex');
+      
+      user = await User.create({
+        telegram_id: telegramIdString, // Сохраняем как строку
+        username: username || null,
+        first_name: first_name || null,
+        last_name: last_name || null,
+        email: `${telegramIdString}@telegram.user`, // Временный email для совместимости
+        password_hash: await bcrypt.hash(randomPassword, 10),
+        is_active: true,
+        is_admin: false, // По умолчанию пользователи Telegram не администраторы
+        telegram_data: JSON.stringify({
+          first_name,
+          last_name,
+          username
+        })
+      });
+    } else {
+      // Обновляем существующие данные пользователя
+      await user.update({
+        username: username || user.username,
+        first_name: first_name || user.first_name,
+        last_name: last_name || user.last_name,
+        telegram_data: JSON.stringify({
+          first_name,
+          last_name,
+          username
+        })
+      });
+    }
+    
+    // Генерируем JWT токен
+    const token = jwt.sign(
+      { 
+        id: user.id,
+        telegram_id: user.telegram_id,
+        is_admin: user.is_admin 
+      },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+    
+    // Возвращаем данные пользователя и токен в едином формате
+    res.status(200).json({
+      data: {
+        user: {
+          id: user.id,
+          name: `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.username || 'Пользователь Telegram',
+          username: user.username,
+          telegram_id: user.telegram_id,
+          is_admin: user.is_admin
+        },
+        token
+      },
+      error: null
+    });
+  } catch (error) {
+    console.error('Ошибка при авторизации через Telegram:', error);
+    res.status(500).json({ 
+      error: 'Ошибка сервера при авторизации через Telegram: ' + error.message,
+      data: null
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -514,5 +613,6 @@ module.exports = {
   logout,
   checkSession,
   getProfile,
-  refreshToken
+  refreshToken,
+  telegramAuth
 };

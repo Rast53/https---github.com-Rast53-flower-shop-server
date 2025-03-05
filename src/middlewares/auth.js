@@ -1,53 +1,69 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
+const JWT_SECRET = process.env.JWT_SECRET || 'secret_key_change_in_production';
 
-// Middleware для проверки JWT токена
+/**
+ * Middleware для проверки авторизации пользователя
+ * Проверяет валидность JWT токена и добавляет информацию о пользователе в request
+ */
 const authMiddleware = async (req, res, next) => {
   try {
-    // Проверяем наличие токена в заголовке
+    // Получаем токен из заголовка авторизации
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        error: 'Не авторизован',
-        data: null
+      return res.status(401).json({ 
+        error: 'Требуется авторизация', 
+        data: null 
       });
     }
 
-    // Извлекаем токен из заголовка
     const token = authHeader.split(' ')[1];
     
     // Проверяем токен
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret_key_change_in_production');
+    const decoded = jwt.verify(token, JWT_SECRET);
     
-    // Находим пользователя
+    // Находим пользователя в базе данных
     const user = await User.findByPk(decoded.id);
-    if (!user) {
-      return res.status(401).json({
-        error: 'Не найден пользователь с таким токеном',
-        data: null
+    
+    // Проверяем, существует ли пользователь и активен ли он
+    if (!user || !user.is_active) {
+      return res.status(401).json({ 
+        error: 'Пользователь не найден или заблокирован', 
+        data: null 
       });
     }
     
-    // Добавляем пользователя к запросу
-    req.user = user;
+    // Добавляем информацию о пользователе в запрос
+    req.user = {
+      id: user.id,
+      email: user.email,
+      name: user.getName ? user.getName() : (user.username || user.email),
+      is_admin: user.is_admin,
+      telegram_id: user.telegram_id
+    };
+    
     next();
   } catch (error) {
     console.error('Ошибка авторизации:', error);
-    return res.status(401).json({
-      error: 'Недействительный токен авторизации',
-      data: null
+    return res.status(401).json({ 
+      error: 'Неверный токен авторизации', 
+      data: null 
     });
   }
 };
 
-// Middleware для проверки прав администратора
+/**
+ * Middleware для проверки прав администратора
+ * Должен использоваться после middleware авторизации
+ */
 const adminMiddleware = (req, res, next) => {
   if (!req.user || !req.user.is_admin) {
-    return res.status(403).json({
-      error: 'Доступ запрещен. Требуются права администратора',
-      data: null
+    return res.status(403).json({ 
+      error: 'Доступ запрещен. Требуются права администратора', 
+      data: null 
     });
   }
+  
   next();
 };
 
@@ -62,5 +78,5 @@ const adminCheck = (req, res, next) => {
 
 module.exports = {
   authMiddleware,
-  adminMiddleware: adminCheck // Переименовываем для ясности
+  adminMiddleware: adminCheck
 }; 

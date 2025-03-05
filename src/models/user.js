@@ -53,6 +53,14 @@ module.exports = (sequelize, DataTypes) => {
     updated_at: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW
+    },
+    telegram_data: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true
     }
   }, {
     tableName: 'users',
@@ -62,13 +70,11 @@ module.exports = (sequelize, DataTypes) => {
       beforeCreate: async (user) => {
         if (user.password) {
           user.password_hash = await bcrypt.hash(user.password, 10);
-          delete user.password;
         }
       },
       beforeUpdate: async (user) => {
         if (user.changed('password') && user.password) {
           user.password_hash = await bcrypt.hash(user.password, 10);
-          delete user.password;
         }
       }
     }
@@ -101,14 +107,17 @@ module.exports = (sequelize, DataTypes) => {
   // Метод для генерации JWT токена
   User.prototype.generateToken = function() {
     const jwt = require('jsonwebtoken');
+    const JWT_SECRET = process.env.JWT_SECRET || 'secret_key_change_in_production';
+    const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+    
     const token = jwt.sign(
       { 
         id: this.id, 
         is_admin: this.is_admin,
         telegram_id: this.telegram_id 
       },
-      process.env.JWT_SECRET || 'secret_key_change_in_production',
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
     );
     return token;
   };

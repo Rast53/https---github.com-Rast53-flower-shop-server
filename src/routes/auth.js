@@ -15,7 +15,8 @@ const {
   verifyTelegram,
   checkSession,
   getProfile,
-  refreshToken
+  refreshToken,
+  telegramAuth
 } = require('../controllers/auth');
 
 // Публичные маршруты аутентификации
@@ -29,5 +30,8 @@ router.get('/me', checkSession);
 router.put('/me', authMiddleware, updateProfile);
 router.get('/profile', authMiddleware, getProfile);
 router.post('/refresh-token', refreshToken);
+
+// Новый маршрут для авторизации через Telegram
+router.post('/telegram', telegramAuth);
 
 module.exports = router; 
