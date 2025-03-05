@@ -1,7 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('../config/db');
-const { User } = require('../models');
+const { user: User } = require('../models');
 
 /**
  * Регистрация нового пользователя
@@ -59,7 +59,7 @@ const generateToken = (user) => {
       is_admin: user.is_admin,
       telegram_id: user.telegram_id 
     },
-    process.env.JWT_SECRET,
+    process.env.JWT_SECRET || 'secret_key_change_in_production',
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
 };
@@ -72,19 +72,16 @@ const login = async (req, res) => {
     console.log('Попытка входа пользователя:', req.body.email);
     const { email, password } = req.body;
     
-    // Проверяем входные данные
     if (!email || !password) {
       return res.status(400).json({
-        error: 'Пожалуйста, введите email и пароль',
+        error: 'Пожалуйста, укажите email и пароль',
         data: null
       });
     }
     
-    // Убедимся что User - это действительно модель Sequelize
-    console.log('Проверка модели User:', typeof User, User.prototype);
-    
     // Ищем пользователя по email
     const user = await User.findOne({ where: { email } });
+    
     if (!user) {
       return res.status(401).json({
         error: 'Неверный email или пароль',
@@ -93,8 +90,9 @@ const login = async (req, res) => {
     }
     
     // Проверяем пароль
-    const isValid = await bcrypt.compare(password, user.password_hash);
-    if (!isValid) {
+    const passwordValid = await checkPassword(user, password);
+    
+    if (!passwordValid) {
       return res.status(401).json({
         error: 'Неверный email или пароль',
         data: null
@@ -102,28 +100,20 @@ const login = async (req, res) => {
     }
     
     // Генерируем JWT токен
-    const token = jwt.sign(
-      { 
-        id: user.id, 
-        is_admin: user.is_admin
-      },
-      process.env.JWT_SECRET || 'secret_key_change_in_production',
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
-    );
+    const token = generateToken(user);
     
-    // Возвращаем данные пользователя и токен
+    // Получаем имя пользователя
+    const name = getUserName(user);
+    
     res.json({
       data: {
+        token,
         user: {
           id: user.id,
-          name: user.getName ? user.getName() : 
-                (user.first_name || user.last_name) ? 
-                  `${user.first_name || ''} ${user.last_name || ''}`.trim() : 
-                  user.username || user.email,
           email: user.email,
-          is_admin: user.is_admin
-        },
-        token
+          is_admin: user.is_admin,
+          name: name
+        }
       },
       error: null
     });
@@ -498,6 +488,21 @@ const refreshToken = async (req, res) => {
       data: null
     });
   }
+};
+
+// Проверка пароля
+const checkPassword = async (user, password) => {
+  return password && user.password_hash 
+    ? await bcrypt.compare(password, user.password_hash) 
+    : false;
+};
+
+// Получение имени пользователя
+const getUserName = (user) => {
+  if (user.first_name || user.last_name) {
+    return [user.first_name, user.last_name].filter(Boolean).join(' ');
+  }
+  return user.username || user.email || `User-${user.id}`;
 };
 
 module.exports = {
