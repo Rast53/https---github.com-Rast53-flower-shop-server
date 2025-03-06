@@ -4,6 +4,34 @@ const { Op } = require('sequelize');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const s3 = require('../config/s3');
+
+/**
+ * Преобразование URL Yandex Object Storage в URL через прокси Nginx
+ */
+const formatImageUrl = (url) => {
+  if (!url) return null;
+  
+  // Если URL уже использует наш прокси или локальный путь, возвращаем как есть
+  if (url.startsWith('/s3-images/') || url.startsWith('/uploads/')) {
+    return url;
+  }
+  
+  // Проверяем, является ли URL ссылкой на Yandex Object Storage
+  if (url.includes('storage.yandexcloud.net') && url.includes(process.env.YANDEX_BUCKET_NAME)) {
+    // Извлекаем путь к файлу после имени бакета
+    const bucketPattern = new RegExp(`${process.env.YANDEX_BUCKET_NAME}/(.+)$`);
+    const match = url.match(bucketPattern);
+    
+    if (match && match[1]) {
+      // Возвращаем URL через наш прокси
+      return `/s3-images/${match[1]}`;
+    }
+  }
+  
+  // Если URL не подлежит преобразованию, возвращаем исходный
+  return url;
+};
 
 /**
  * Получение всех цветов с возможностью фильтрации и пагинацией
@@ -86,12 +114,19 @@ const getFlowers = async (req, res) => {
       }]
     });
     
+    // Форматируем URL изображений
+    const formattedFlowers = flowers.map(flower => {
+      const flowerData = flower.toJSON();
+      flowerData.image_url = formatImageUrl(flowerData.image_url);
+      return flowerData;
+    });
+    
     // Рассчитываем параметры пагинации
     const totalPages = Math.ceil(count / limit);
     
     res.json({
       data: {
-        flowers,
+        flowers: formattedFlowers,
         pagination: {
           total: count,
           totalPages,
@@ -127,17 +162,15 @@ const getAllFlowers = async (req, res) => {
       order: [['popularity', 'DESC']]
     });
     
-    // Используем тот же формат ответа, что и в getFlowers
-    res.json({
-      data: {
-        flowers,
-        pagination: {
-          total: flowers.length,
-          totalPages: 1,
-          currentPage: 1,
-          limit: flowers.length
-        }
-      },
+    // Форматируем URL изображений
+    const formattedFlowers = flowers.map(flower => {
+      const flowerData = flower.toJSON();
+      flowerData.image_url = formatImageUrl(flowerData.image_url);
+      return flowerData;
+    });
+    
+    return res.status(200).json({
+      data: formattedFlowers,
       error: null
     });
   } catch (error) {
@@ -172,10 +205,12 @@ const getFlowerById = async (req, res) => {
       });
     }
     
-    res.json({
-      data: {
-        flower
-      },
+    // Форматируем URL изображения
+    const flowerData = flower.toJSON();
+    flowerData.image_url = formatImageUrl(flowerData.image_url);
+    
+    return res.status(200).json({
+      data: flowerData,
       error: null
     });
   } catch (error) {
@@ -213,6 +248,28 @@ const saveImage = async (file) => {
 };
 
 /**
+ * Удаление изображения из S3
+ */
+const deleteImageFromS3 = async (imageUrl) => {
+  if (!imageUrl || !imageUrl.includes('storage.yandexcloud.net')) return;
+
+  try {
+    // Извлекаем ключ из URL
+    const key = imageUrl.split('.net/').pop();
+    
+    // Удаляем объект из S3
+    await s3.deleteObject({
+      Bucket: process.env.YANDEX_BUCKET_NAME,
+      Key: key
+    }).promise();
+    
+    console.log(`Изображение удалено из S3: ${key}`);
+  } catch (error) {
+    console.error('Ошибка при удалении изображения из S3:', error);
+  }
+};
+
+/**
  * Создание нового цветка
  */
 const createFlower = async (req, res) => {
@@ -230,11 +287,11 @@ const createFlower = async (req, res) => {
       });
     }
     
-    // Проверяем наличие файла изображения
+    // При использовании multer-s3, информация о загруженном файле доступна в req.file
     let finalImageUrl = image_url;
     
     if (req.file) {
-      finalImageUrl = await saveImage(req.file);
+      finalImageUrl = req.file.location; // S3 URL изображения
     }
     
     // Используем Sequelize для создания цветка
@@ -249,8 +306,8 @@ const createFlower = async (req, res) => {
       popularity: 0
     });
     
-    // Загружаем данные категории для ответа
-    const flowerWithCategory = await Flower.findByPk(flower.id, {
+    // Получаем данные с категорией
+    const createdFlower = await Flower.findByPk(flower.id, {
       include: [{
         model: Category,
         as: 'category',
@@ -258,10 +315,12 @@ const createFlower = async (req, res) => {
       }]
     });
     
+    // Форматируем URL изображения
+    const formattedFlower = createdFlower.toJSON();
+    formattedFlower.image_url = formatImageUrl(formattedFlower.image_url);
+    
     return res.status(201).json({
-      data: {
-        flower: flowerWithCategory
-      },
+      data: formattedFlower,
       error: null
     });
   } catch (error) {
@@ -274,7 +333,7 @@ const createFlower = async (req, res) => {
 };
 
 /**
- * Обновление цветка
+ * Обновление информации о цветке
  */
 const updateFlower = async (req, res) => {
   try {
@@ -294,14 +353,18 @@ const updateFlower = async (req, res) => {
       });
     }
     
-    // Проверяем наличие файла изображения
+    // При использовании multer-s3
     let finalImageUrl = image_url || existingFlower.image_url;
     
     if (req.file) {
-      finalImageUrl = await saveImage(req.file);
+      finalImageUrl = req.file.location; // S3 URL изображения
       
-      // Удаляем старое изображение, если оно существует и не является внешней ссылкой
-      if (existingFlower.image_url && existingFlower.image_url.startsWith('/uploads')) {
+      // Удаляем старое изображение из S3, если оно существует
+      if (existingFlower.image_url && existingFlower.image_url.includes('storage.yandexcloud.net')) {
+        await deleteImageFromS3(existingFlower.image_url);
+      } 
+      // Для обратной совместимости также удаляем локальные файлы
+      else if (existingFlower.image_url && existingFlower.image_url.startsWith('/uploads')) {
         const oldImagePath = path.join(__dirname, '../..', existingFlower.image_url);
         if (fs.existsSync(oldImagePath)) {
           fs.unlinkSync(oldImagePath);
@@ -329,10 +392,12 @@ const updateFlower = async (req, res) => {
       }]
     });
     
+    // Форматируем URL изображения
+    const formattedFlower = updatedFlower.toJSON();
+    formattedFlower.image_url = formatImageUrl(formattedFlower.image_url);
+    
     return res.status(200).json({
-      data: {
-        flower: updatedFlower
-      },
+      data: formattedFlower,
       error: null
     });
   } catch (error) {
@@ -361,8 +426,12 @@ const deleteFlower = async (req, res) => {
       });
     }
     
-    // Удаляем изображение, если оно существует и находится в локальном хранилище
-    if (flower.image_url && flower.image_url.startsWith('/uploads')) {
+    // Удаляем изображение из S3
+    if (flower.image_url && flower.image_url.includes('storage.yandexcloud.net')) {
+      await deleteImageFromS3(flower.image_url);
+    }
+    // Для обратной совместимости также удаляем локальные файлы
+    else if (flower.image_url && flower.image_url.startsWith('/uploads')) {
       const imagePath = path.join(__dirname, '../..', flower.image_url);
       if (fs.existsSync(imagePath)) {
         fs.unlinkSync(imagePath);
