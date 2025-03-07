@@ -63,11 +63,15 @@ const flowerRoutes = require("./routes/flowers");
 const categoryRoutes = require("./routes/categories");
 const orderRoutes = require("./routes/orders");
 const authRoutes = require("./routes/auth");
+const userRoutes = require("./routes/users");
+const adminRoutes = require("./routes/admin");
 
 app.use("/api/flowers", flowerRoutes);
 app.use("/api/categories", categoryRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/auth", authRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/admin", adminRoutes);
 
 // Базовый маршрут для проверки работы API
 app.get("/", (req, res) => {
@@ -183,6 +187,4 @@ app.get('/api/test', (req, res) => {
   });
 }); 
 
-// Подключаем маршруты
-app.use('/api/categories', require('./routes/categories'));
-app.use('/api/flowers', require('./routes/flowers')); 
+// Маршруты уже подключены выше 

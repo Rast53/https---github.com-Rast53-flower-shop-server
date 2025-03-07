@@ -10,7 +10,7 @@ router.get('/', flowerController.getAllFlowers);
 // Заменяем /all на другой метод для получения всех цветов без фильтрации
 router.get('/all', flowerController.getFlowers); 
 
-// Получение цветка по ID
+// Получение цветка по ID - убираем authMiddleware
 router.get('/:id', flowerController.getFlowerById);
 
 // Маршруты для администраторов с поддержкой загрузки файлов

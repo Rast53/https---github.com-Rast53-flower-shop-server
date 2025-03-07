@@ -1,5 +1,5 @@
-const db = require('../config/db');
 const { category: Category, flower: Flower } = require('../models');
+const { Op } = require('sequelize');
 
 /**
  * Получение всех категорий
@@ -76,33 +76,61 @@ const getCategoryById = async (req, res) => {
  */
 const createCategory = async (req, res) => {
   try {
-    const { name, description, image_url } = req.body;
+    const { name, slug, description, image_url } = req.body;
     
     if (!name) {
-      return res.status(400).json({ message: 'Название категории обязательно' });
+      return res.status(400).json({ 
+        error: 'Название категории обязательно',
+        data: null 
+      });
     }
     
     // Проверяем, существует ли уже категория с таким именем
-    const existCheck = await db.query(
-      'SELECT * FROM categories WHERE name = $1',
-      [name]
-    );
+    const existingCategory = await Category.findOne({ 
+      where: { name }
+    });
     
-    if (existCheck.rows.length > 0) {
-      return res.status(400).json({ message: 'Категория с таким названием уже существует' });
+    if (existingCategory) {
+      return res.status(400).json({ 
+        error: 'Категория с таким названием уже существует',
+        data: null 
+      });
     }
     
-    const { rows } = await db.query(
-      `INSERT INTO categories (name, description, image_url)
-       VALUES ($1, $2, $3)
-       RETURNING *`,
-      [name, description, image_url]
-    );
+    // Проверяем, существует ли уже категория с таким slug
+    if (slug) {
+      const existingSlug = await Category.findOne({ 
+        where: { slug } 
+      });
+      
+      if (existingSlug) {
+        return res.status(400).json({ 
+          error: 'Категория с таким URL (slug) уже существует',
+          data: null 
+        });
+      }
+    }
     
-    return res.status(201).json(rows[0]);
+    // Создаем новую категорию
+    const newCategory = await Category.create({
+      name,
+      slug: slug || null,
+      description: description || null,
+      image_url: image_url || null,
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+    
+    return res.status(201).json({
+      data: newCategory,
+      error: null
+    });
   } catch (error) {
-    console.error('Error creating category:', error);
-    return res.status(500).json({ message: 'Ошибка при создании категории' });
+    console.error('Ошибка создания категории:', error);
+    return res.status(500).json({ 
+      error: 'Ошибка при создании категории: ' + error.message,
+      data: null 
+    });
   }
 };
 
@@ -112,39 +140,71 @@ const createCategory = async (req, res) => {
 const updateCategory = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, image_url } = req.body;
+    const { name, slug, description, image_url } = req.body;
     
     // Сначала проверим, существует ли категория
-    const checkResult = await db.query('SELECT * FROM categories WHERE id = $1', [id]);
+    const existingCategory = await Category.findByPk(id);
     
-    if (checkResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Категория не найдена' });
+    if (!existingCategory) {
+      return res.status(404).json({ 
+        error: 'Категория не найдена',
+        data: null 
+      });
     }
     
     // Проверяем, не существует ли уже другая категория с таким именем
-    if (name) {
-      const existCheck = await db.query(
-        'SELECT * FROM categories WHERE name = $1 AND id != $2',
-        [name, id]
-      );
+    if (name && name !== existingCategory.name) {
+      const nameCheck = await Category.findOne({
+        where: { 
+          name,
+          id: { [Op.ne]: id }
+        }
+      });
       
-      if (existCheck.rows.length > 0) {
-        return res.status(400).json({ message: 'Категория с таким названием уже существует' });
+      if (nameCheck) {
+        return res.status(400).json({ 
+          error: 'Категория с таким названием уже существует',
+          data: null
+        });
       }
     }
     
-    const { rows } = await db.query(
-      `UPDATE categories 
-       SET name = $1, description = $2, image_url = $3
-       WHERE id = $4
-       RETURNING *`,
-      [name, description, image_url, id]
-    );
+    // Проверяем, не существует ли уже другая категория с таким slug
+    if (slug && slug !== existingCategory.slug) {
+      const slugCheck = await Category.findOne({
+        where: { 
+          slug,
+          id: { [Op.ne]: id }
+        }
+      });
+      
+      if (slugCheck) {
+        return res.status(400).json({ 
+          error: 'Категория с таким URL (slug) уже существует',
+          data: null
+        });
+      }
+    }
     
-    return res.status(200).json(rows[0]);
+    // Обновляем категорию
+    await existingCategory.update({
+      name: name || existingCategory.name,
+      slug: slug || existingCategory.slug,
+      description: description !== undefined ? description : existingCategory.description,
+      image_url: image_url !== undefined ? image_url : existingCategory.image_url,
+      updated_at: new Date()
+    });
+    
+    return res.status(200).json({
+      data: existingCategory,
+      error: null
+    });
   } catch (error) {
-    console.error('Error updating category:', error);
-    return res.status(500).json({ message: 'Ошибка при обновлении категории' });
+    console.error('Ошибка обновления категории:', error);
+    return res.status(500).json({
+      error: 'Ошибка при обновлении категории: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -156,27 +216,38 @@ const deleteCategory = async (req, res) => {
     const { id } = req.params;
     
     // Сначала проверим, существует ли категория
-    const checkResult = await db.query('SELECT * FROM categories WHERE id = $1', [id]);
+    const existingCategory = await Category.findByPk(id);
     
-    if (checkResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Категория не найдена' });
-    }
-    
-    // Проверим, есть ли цветы в этой категории
-    const flowersCheck = await db.query('SELECT COUNT(*) FROM flowers WHERE category_id = $1', [id]);
-    
-    if (parseInt(flowersCheck.rows[0].count) > 0) {
-      return res.status(400).json({ 
-        message: 'Нельзя удалить категорию, содержащую цветы. Сначала удалите все цветы из категории.'
+    if (!existingCategory) {
+      return res.status(404).json({ 
+        error: 'Категория не найдена',
+        data: null
       });
     }
     
-    await db.query('DELETE FROM categories WHERE id = $1', [id]);
+    // Проверим, есть ли цветы в этой категории
+    const flowersCount = await Flower.count({ where: { category_id: id } });
     
-    return res.status(200).json({ message: 'Категория успешно удалена' });
+    if (flowersCount > 0) {
+      return res.status(400).json({ 
+        error: 'Нельзя удалить категорию, содержащую цветы. Сначала удалите все цветы из категории.',
+        data: null
+      });
+    }
+    
+    // Удаляем категорию
+    await existingCategory.destroy();
+    
+    return res.status(200).json({ 
+      data: { message: 'Категория успешно удалена' },
+      error: null
+    });
   } catch (error) {
-    console.error('Error deleting category:', error);
-    return res.status(500).json({ message: 'Ошибка при удалении категории' });
+    console.error('Ошибка удаления категории:', error);
+    return res.status(500).json({ 
+      error: 'Ошибка при удалении категории: ' + error.message,
+      data: null
+    });
   }
 };
 

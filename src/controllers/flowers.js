@@ -43,7 +43,8 @@ const getFlowers = async (req, res) => {
     // Формируем условия запроса на основе параметров
     const where = {};
     
-    if (req.query.category_id) {
+    // Фильтрация по категории, но только если это не 'all'
+    if (req.query.category_id && req.query.category_id !== 'all') {
       where.category_id = req.query.category_id;
     }
     
@@ -114,10 +115,17 @@ const getFlowers = async (req, res) => {
       }]
     });
     
-    // Форматируем URL изображений
+    // Форматируем URL изображений и добавляем поле in_stock для совместимости
     const formattedFlowers = flowers.map(flower => {
       const flowerData = flower.toJSON();
       flowerData.image_url = formatImageUrl(flowerData.image_url);
+      
+      // Убедимся, что поле is_available имеет тип boolean
+      flowerData.is_available = !!flowerData.is_available;
+      
+      // Для совместимости с клиентом добавим поле in_stock
+      flowerData.in_stock = flowerData.is_available && flowerData.stock_quantity > 0;
+      
       return flowerData;
     });
     
@@ -162,10 +170,17 @@ const getAllFlowers = async (req, res) => {
       order: [['popularity', 'DESC']]
     });
     
-    // Форматируем URL изображений
+    // Форматируем URL изображений и добавляем поле in_stock для совместимости
     const formattedFlowers = flowers.map(flower => {
       const flowerData = flower.toJSON();
       flowerData.image_url = formatImageUrl(flowerData.image_url);
+      
+      // Убедимся, что поле is_available имеет тип boolean
+      flowerData.is_available = !!flowerData.is_available;
+      
+      // Для совместимости с клиентом добавим поле in_stock
+      flowerData.in_stock = flowerData.is_available && flowerData.stock_quantity > 0;
+      
       return flowerData;
     });
     
@@ -188,6 +203,7 @@ const getAllFlowers = async (req, res) => {
 const getFlowerById = async (req, res) => {
   try {
     const flowerId = req.params.id;
+    console.log(`Запрос на получение цветка с ID: ${flowerId}`);
     
     // Ищем цветок по ID
     const flower = await Flower.findByPk(flowerId, {
@@ -199,6 +215,7 @@ const getFlowerById = async (req, res) => {
     });
     
     if (!flower) {
+      console.log(`Цветок с ID ${flowerId} не найден`);
       return res.status(404).json({
         error: 'Цветок не найден',
         data: null
@@ -208,6 +225,27 @@ const getFlowerById = async (req, res) => {
     // Форматируем URL изображения
     const flowerData = flower.toJSON();
     flowerData.image_url = formatImageUrl(flowerData.image_url);
+    
+    // Проверяем наличие необходимых полей
+    console.log(`Данные цветка ${flowerId}:`, {
+      id: flowerData.id,
+      name: flowerData.name,
+      price: flowerData.price,
+      is_available: flowerData.is_available,
+      stock_quantity: flowerData.stock_quantity
+    });
+    
+    // Убедимся, что поле is_available имеет тип boolean
+    flowerData.is_available = !!flowerData.is_available;
+    
+    // Для совместимости с клиентом добавим поле in_stock
+    flowerData.in_stock = flowerData.is_available && flowerData.stock_quantity > 0;
+    
+    console.log(`Отправляем данные о цветке ${flowerId}, статус доступности:`, {
+      is_available: flowerData.is_available,
+      stock_quantity: flowerData.stock_quantity,
+      in_stock: flowerData.in_stock
+    });
     
     return res.status(200).json({
       data: flowerData,

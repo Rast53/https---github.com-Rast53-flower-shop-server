@@ -1,4 +1,5 @@
-const db = require('../config/db');
+const { order: Order, user: User, orderitem: OrderItem, flower: Flower, sequelize } = require('../models');
+const { Op } = require('sequelize');
 
 /**
  * Получение всех заказов (только для администраторов)
@@ -6,44 +7,85 @@ const db = require('../config/db');
 const getAllOrders = async (req, res) => {
   try {
     const { status } = req.query;
-    let query = `
-      SELECT o.*, u.name as user_name, u.email as user_email
-      FROM orders o
-      LEFT JOIN users u ON o.user_id = u.id
-    `;
-    const params = [];
-
-    if (status) {
-      query += ' WHERE o.status = $1';
-      params.push(status);
+    
+    // Сопоставление текстовых статусов с status_id
+    const statusMapping = {
+      'new': 1,
+      'processing': 2,
+      'shipped': 3,
+      'delivered': 4,
+      'cancelled': 5
+    };
+    
+    // Создаем условия запроса
+    const where = {};
+    if (status && statusMapping[status]) {
+      where.status_id = statusMapping[status];
     }
-
-    query += ' ORDER BY o.created_at DESC';
     
-    const { rows } = await db.query(query, params);
+    // Получаем все заказы с включением связанных моделей
+    const orders = await Order.findAll({
+      where,
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'telegram_id']
+        },
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Flower,
+              as: 'flower',
+              attributes: ['id', 'name', 'price', 'image_url']
+            }
+          ]
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
     
-    // Для каждого заказа получаем все его позиции
-    const ordersWithItems = await Promise.all(
-      rows.map(async (order) => {
-        const itemsResult = await db.query(
-          `SELECT oi.*, f.name as flower_name, f.image_url as flower_image
-           FROM order_items oi
-           LEFT JOIN flowers f ON oi.flower_id = f.id
-           WHERE oi.order_id = $1`,
-          [order.id]
-        );
-        
-        return {
-          ...order,
-          items: itemsResult.rows
-        };
-      })
-    );
+    // Обратное сопоставление для ответа
+    const reverseStatusMapping = {
+      1: 'new',
+      2: 'processing',
+      3: 'shipped',
+      4: 'delivered',
+      5: 'cancelled'
+    };
     
-    return res.status(200).json(ordersWithItems);
+    // Форматируем данные для ответа
+    const formattedOrders = orders.map(order => {
+      const orderData = order.toJSON();
+      
+      // Добавляем информацию о пользователе в удобном формате
+      if (orderData.user) {
+        orderData.user_name = orderData.user.first_name && orderData.user.last_name 
+          ? `${orderData.user.first_name} ${orderData.user.last_name}` 
+          : orderData.user.email;
+        orderData.user_email = orderData.user.email;
+        orderData.user_phone = orderData.user.phone;
+        orderData.telegram_user_id = orderData.user.telegram_id;
+      }
+      
+      // Добавляем текстовый статус
+      orderData.status = reverseStatusMapping[orderData.status_id] || 'unknown';
+      
+      return orderData;
+    });
+    
+    return res.status(200).json({
+      data: formattedOrders,
+      error: null
+    });
   } catch (error) {
-    console.error('Error getting orders:', error);
-    return res.status(500).json({ message: 'Ошибка при получении заказов' });
+    console.error('Ошибка при получении заказов:', error);
+    return res.status(500).json({ 
+      error: 'Ошибка при получении заказов: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -54,36 +96,70 @@ const getOrderById = async (req, res) => {
   try {
     const { id } = req.params;
     
-    const { rows } = await db.query(
-      `SELECT o.*, u.name as user_name, u.email as user_email
-       FROM orders o
-       LEFT JOIN users u ON o.user_id = u.id
-       WHERE o.id = $1`,
-      [id]
-    );
+    // Ищем заказ с включением связанных моделей
+    const order = await Order.findByPk(id, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'first_name', 'last_name', 'email', 'phone', 'telegram_id']
+        },
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Flower,
+              as: 'flower',
+              attributes: ['id', 'name', 'price', 'image_url']
+            }
+          ]
+        }
+      ]
+    });
     
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Заказ не найден' });
+    if (!order) {
+      return res.status(404).json({ 
+        error: 'Заказ не найден',
+        data: null 
+      });
     }
     
-    // Получаем все позиции заказа
-    const itemsResult = await db.query(
-      `SELECT oi.*, f.name as flower_name, f.image_url as flower_image
-       FROM order_items oi
-       LEFT JOIN flowers f ON oi.flower_id = f.id
-       WHERE oi.order_id = $1`,
-      [id]
-    );
+    // Форматируем данные для ответа
+    const orderData = order.toJSON();
     
-    const result = {
-      ...rows[0],
-      items: itemsResult.rows
+    // Добавляем информацию о пользователе в удобном формате
+    if (orderData.user) {
+      orderData.user_name = orderData.user.first_name && orderData.user.last_name 
+        ? `${orderData.user.first_name} ${orderData.user.last_name}` 
+        : orderData.user.email;
+      orderData.user_email = orderData.user.email;
+      orderData.user_phone = orderData.user.phone;
+      orderData.telegram_user_id = orderData.user.telegram_id;
+    }
+    
+    // Сопоставление status_id с текстовыми значениями
+    const statusMapping = {
+      1: 'new',
+      2: 'processing',
+      3: 'shipped',
+      4: 'delivered',
+      5: 'cancelled'
     };
     
-    return res.status(200).json(result);
+    // Добавляем текстовый статус
+    orderData.status = statusMapping[orderData.status_id] || 'unknown';
+    
+    return res.status(200).json({
+      data: orderData,
+      error: null
+    });
   } catch (error) {
-    console.error('Error getting order by ID:', error);
-    return res.status(500).json({ message: 'Ошибка при получении заказа' });
+    console.error('Ошибка при получении заказа:', error);
+    return res.status(500).json({ 
+      error: 'Ошибка при получении заказа: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -94,35 +170,52 @@ const getUserOrders = async (req, res) => {
   try {
     const userId = req.user.id;
     
-    const { rows } = await db.query(
-      `SELECT * FROM orders 
-       WHERE user_id = $1
-       ORDER BY created_at DESC`,
-      [userId]
-    );
+    // Получаем заказы пользователя с включением позиций заказа
+    const orders = await Order.findAll({
+      where: { user_id: userId },
+      include: [
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Flower,
+              as: 'flower',
+              attributes: ['id', 'name', 'price', 'image_url']
+            }
+          ]
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
     
-    // Для каждого заказа получаем все его позиции
-    const ordersWithItems = await Promise.all(
-      rows.map(async (order) => {
-        const itemsResult = await db.query(
-          `SELECT oi.*, f.name as flower_name, f.image_url as flower_image
-           FROM order_items oi
-           LEFT JOIN flowers f ON oi.flower_id = f.id
-           WHERE oi.order_id = $1`,
-          [order.id]
-        );
-        
-        return {
-          ...order,
-          items: itemsResult.rows
-        };
-      })
-    );
+    // Форматируем ответ
+    const formattedOrders = orders.map(order => {
+      const orderData = order.toJSON();
+      
+      // Добавляем текстовый статус
+      const statusMapping = {
+        1: 'new',
+        2: 'processing',
+        3: 'shipped',
+        4: 'delivered',
+        5: 'cancelled'
+      };
+      orderData.status = statusMapping[orderData.status_id] || 'unknown';
+      
+      return orderData;
+    });
     
-    return res.status(200).json(ordersWithItems);
+    return res.status(200).json({
+      data: formattedOrders,
+      error: null
+    });
   } catch (error) {
-    console.error('Error getting user orders:', error);
-    return res.status(500).json({ message: 'Ошибка при получении заказов пользователя' });
+    console.error('Ошибка при получении заказов пользователя:', error);
+    return res.status(500).json({ 
+      error: 'Ошибка при получении заказов пользователя: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -130,6 +223,8 @@ const getUserOrders = async (req, res) => {
  * Создание нового заказа
  */
 const createOrder = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  
   try {
     const { 
       customer_name, 
@@ -147,114 +242,167 @@ const createOrder = async (req, res) => {
     // Проверяем обязательные поля
     if (!customer_name || !customer_phone || !customer_address || !items || !items.length) {
       return res.status(400).json({ 
-        message: 'Имя, телефон, адрес и позиции заказа обязательны'
+        error: 'Имя, телефон, адрес и позиции заказа обязательны',
+        data: null
       });
     }
     
-    // Проверяем наличие и стоимость цветов
+    // Получаем все цветы из запроса
+    // В items ожидаются объекты с полями flower_id, но в БД они будут сохранены как product_id
     const flowerIds = items.map(item => item.flower_id);
-    const { rows: flowers } = await db.query(
-      `SELECT id, price, stock_quantity, name FROM flowers 
-       WHERE id = ANY($1::int[])`,
-      [flowerIds]
-    );
+    const flowers = await Flower.findAll({
+      where: {
+        id: {
+          [Op.in]: flowerIds
+        }
+      }
+    });
     
-    // Создаем словарь цветов по id для быстрого доступа
+    // Создаем словарь для быстрого доступа к цветам
     const flowersMap = {};
     flowers.forEach(flower => {
       flowersMap[flower.id] = flower;
     });
     
-    // Проверяем, все ли цветы существуют и достаточно ли их в наличии
+    // Проверяем наличие всех цветов в БД
+    const missingFlowerIds = flowerIds.filter(id => !flowersMap[id]);
+    if (missingFlowerIds.length > 0) {
+      return res.status(400).json({
+        error: `Цветы с ID ${missingFlowerIds.join(', ')} не найдены`,
+        data: null
+      });
+    }
+    
+    // Проверяем доступность цветов и их количество
+    const unavailableFlowers = [];
+    const insufficientStockFlowers = [];
+    
     for (const item of items) {
       const flower = flowersMap[item.flower_id];
       
-      if (!flower) {
-        return res.status(400).json({ 
-          message: `Цветок с ID ${item.flower_id} не найден`
-        });
+      if (!flower.is_available) {
+        unavailableFlowers.push(item.flower_id);
       }
       
       if (flower.stock_quantity < item.quantity) {
-        return res.status(400).json({ 
-          message: `Недостаточное количество цветов "${flower.name}" в наличии. Доступно: ${flower.stock_quantity}`
+        insufficientStockFlowers.push({
+          id: item.flower_id,
+          name: flower.name,
+          requested: item.quantity,
+          available: flower.stock_quantity
         });
       }
     }
     
-    // Рассчитываем общую стоимость заказа
-    let total_amount = 0;
-    items.forEach(item => {
-      const flower = flowersMap[item.flower_id];
-      total_amount += flower.price * item.quantity;
-    });
+    if (unavailableFlowers.length > 0) {
+      return res.status(400).json({
+        error: `Цветы с ID ${unavailableFlowers.join(', ')} недоступны для покупки`,
+        data: null
+      });
+    }
     
-    // Начинаем транзакцию
-    const client = await db.pool.connect();
+    if (insufficientStockFlowers.length > 0) {
+      return res.status(400).json({
+        error: 'Недостаточное количество цветов в наличии',
+        data: {
+          items: insufficientStockFlowers
+        }
+      });
+    }
+    
+    // Рассчитываем общую стоимость заказа
+    let totalAmount = 0;
+    for (const item of items) {
+      const flower = flowersMap[item.flower_id];
+      totalAmount += parseFloat(flower.price) * item.quantity;
+    }
     
     try {
-      await client.query('BEGIN');
-      
       // Создаем заказ
-      const orderResult = await client.query(
-        `INSERT INTO orders (
-          user_id, customer_name, customer_phone, customer_address, 
-          total_amount, payment_method, status
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *`,
-        [
-          user_id, 
-          customer_name, 
-          customer_phone, 
-          customer_address, 
-          total_amount, 
-          payment_method || 'cash', 
-          'pending'
-        ]
-      );
-      
-      const order = orderResult.rows[0];
+      const order = await Order.create({
+        user_id,
+        contact_name: customer_name,     // Используем правильные имена полей
+        contact_phone: customer_phone,   // Используем правильные имена полей
+        shipping_address: customer_address,
+        total_amount: totalAmount,       // Используем правильное имя поля
+        // Удаляем поля, которых нет в БД
+        // payment_method: payment_method || 'cash',
+        status_id: 1, // 'new'
+        // payment_status: 'pending',
+        notes: req.body.notes || '',
+        created_at: new Date(),
+        updated_at: new Date()
+      }, { transaction });
       
       // Добавляем позиции заказа
       for (const item of items) {
         const flower = flowersMap[item.flower_id];
+        const unitPrice = parseFloat(flower.price);
+        const totalItemPrice = unitPrice * item.quantity;
         
-        await client.query(
-          `INSERT INTO order_items (
-            order_id, flower_id, quantity, price_per_unit
-          )
-          VALUES ($1, $2, $3, $4)`,
-          [order.id, item.flower_id, item.quantity, flower.price]
-        );
+        await OrderItem.create({
+          order_id: order.id,
+          product_id: item.flower_id, // Используем product_id вместо flower_id
+          quantity: item.quantity,
+          unit_price: unitPrice,       // Используем unit_price вместо price
+          total_price: totalItemPrice  // Добавляем total_price
+        }, { transaction });
         
         // Уменьшаем количество цветов в наличии
-        await client.query(
-          `UPDATE flowers 
-           SET stock_quantity = stock_quantity - $1
-           WHERE id = $2`,
-          [item.quantity, item.flower_id]
+        await Flower.update(
+          { stock_quantity: flower.stock_quantity - item.quantity },
+          { 
+            where: { id: item.flower_id },
+            transaction
+          }
         );
       }
       
-      await client.query('COMMIT');
+      await transaction.commit();
       
-      // Получаем полные данные заказа для ответа
-      const completeOrder = await getOrderById(
-        { params: { id: order.id } },
-        { status: () => ({ json: data => data }) }
-      );
+      // Получаем полные данные заказа с вложенными элементами
+      const completeOrder = await Order.findByPk(order.id, {
+        include: [
+          {
+            model: OrderItem,
+            as: 'items',
+            include: [
+              {
+                model: Flower,
+                as: 'flower'
+              }
+            ]
+          }
+        ]
+      });
       
-      return res.status(201).json(completeOrder);
+      // Форматируем ответ
+      const orderData = completeOrder.toJSON();
+      
+      // Добавляем текстовый статус
+      const statusMapping = {
+        1: 'new',
+        2: 'processing',
+        3: 'shipped',
+        4: 'delivered',
+        5: 'cancelled'
+      };
+      orderData.status = statusMapping[orderData.status_id] || 'unknown';
+      
+      return res.status(201).json({
+        data: orderData,
+        error: null
+      });
     } catch (error) {
-      await client.query('ROLLBACK');
+      await transaction.rollback();
       throw error;
-    } finally {
-      client.release();
     }
   } catch (error) {
-    console.error('Error creating order:', error);
-    return res.status(500).json({ message: 'Ошибка при создании заказа' });
+    console.error('Ошибка при создании заказа:', error);
+    return res.status(500).json({ 
+      error: 'Ошибка при создании заказа: ' + error.message,
+      data: null
+    });
   }
 };
 
@@ -266,77 +414,67 @@ const updateOrderStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
     
+    // Сопоставление текстовых статусов с status_id
+    const statusMapping = {
+      'new': 1,
+      'processing': 2,
+      'shipped': 3,
+      'delivered': 4,
+      'cancelled': 5
+    };
+    
     // Проверяем валидность статуса
-    const validStatuses = ['pending', 'processing', 'completed', 'cancelled'];
-    if (!validStatuses.includes(status)) {
+    const validStatuses = ['new', 'processing', 'shipped', 'delivered', 'cancelled'];
+    
+    if (!status || !validStatuses.includes(status)) {
       return res.status(400).json({ 
-        message: `Недопустимый статус. Доступные статусы: ${validStatuses.join(', ')}`
+        error: `Неверный статус. Допустимые значения: ${validStatuses.join(', ')}`,
+        data: null
       });
     }
     
-    // Проверяем существование заказа
-    const checkResult = await db.query('SELECT * FROM orders WHERE id = $1', [id]);
+    // Преобразуем текстовый статус в status_id
+    const status_id = statusMapping[status];
     
-    if (checkResult.rows.length === 0) {
-      return res.status(404).json({ message: 'Заказ не найден' });
+    // Находим заказ
+    const order = await Order.findByPk(id);
+    
+    if (!order) {
+      return res.status(404).json({ 
+        error: 'Заказ не найден',
+        data: null 
+      });
     }
     
-    // Если заказ отменяется, возвращаем цветы в наличие
-    if (status === 'cancelled' && checkResult.rows[0].status !== 'cancelled') {
-      const client = await db.pool.connect();
-      
-      try {
-        await client.query('BEGIN');
-        
-        // Получаем позиции заказа
-        const itemsResult = await client.query(
-          'SELECT * FROM order_items WHERE order_id = $1',
-          [id]
-        );
-        
-        // Возвращаем цветы в наличие
-        for (const item of itemsResult.rows) {
-          await client.query(
-            `UPDATE flowers 
-             SET stock_quantity = stock_quantity + $1
-             WHERE id = $2`,
-            [item.quantity, item.flower_id]
-          );
-        }
-        
-        // Обновляем статус заказа
-        const { rows } = await client.query(
-          `UPDATE orders 
-           SET status = $1, updated_at = NOW()
-           WHERE id = $2
-           RETURNING *`,
-          [status, id]
-        );
-        
-        await client.query('COMMIT');
-        
-        return res.status(200).json(rows[0]);
-      } catch (error) {
-        await client.query('ROLLBACK');
-        throw error;
-      } finally {
-        client.release();
-      }
-    } else {
-      // Простое обновление статуса
-      const { rows } = await db.query(
-        `UPDATE orders 
-         SET status = $1, updated_at = NOW()
-         WHERE id = $2
-         RETURNING *`,
-        [status, id]
-      );
-      
-      return res.status(200).json(rows[0]);
-    }
+    // Обновляем статус
+    await order.update({ 
+      status_id,
+      updated_at: new Date()
+    });
+    
+    // Обратное сопоставление для ответа
+    const reverseStatusMapping = {
+      1: 'new',
+      2: 'processing',
+      3: 'shipped',
+      4: 'delivered',
+      5: 'cancelled'
+    };
+    
+    return res.status(200).json({
+      data: {
+        id: order.id,
+        status: reverseStatusMapping[order.status_id] || 'unknown',
+        updated_at: order.updated_at
+      },
+      error: null
+    });
   } catch (error) {
-    console.error('Error updating order status:', error);
-    return res.status(500).json({ message: 'Ошибка при обновлении статуса заказа' });
+    console.error('Ошибка при обновлении статуса заказа:', error);
+    return res.status(500).json({ 
+      error: 'Ошибка при обновлении статуса заказа: ' + error.message,
+      data: null
+    });
   }
 };
 
