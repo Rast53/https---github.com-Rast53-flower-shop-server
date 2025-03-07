@@ -7,15 +7,15 @@ module.exports = (sequelize, DataTypes) => {
     },
     order_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: 'orders',
         key: 'id'
       }
     },
-    flower_id: {
+    product_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: 'flowers',
         key: 'id'
@@ -23,18 +23,17 @@ module.exports = (sequelize, DataTypes) => {
     },
     quantity: {
       type: DataTypes.INTEGER,
-      allowNull: false,
-      defaultValue: 1
+      allowNull: false
     },
-    price: {
+    unit_price: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false
+    },
+    total_price: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false
     },
     created_at: {
-      type: DataTypes.DATE,
-      defaultValue: DataTypes.NOW
-    },
-    updated_at: {
       type: DataTypes.DATE,
       defaultValue: DataTypes.NOW
     }
@@ -51,7 +50,7 @@ module.exports = (sequelize, DataTypes) => {
     });
     
     OrderItem.belongsTo(models.flower, {
-      foreignKey: 'flower_id',
+      foreignKey: 'product_id',
       as: 'flower'
     });
   };
