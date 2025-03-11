@@ -543,11 +543,100 @@ const deleteOrder = async (req, res) => {
   }
 };
 
+/**
+ * Получение заказов пользователя по Telegram ID
+ * @route GET /api/orders/telegram/:telegramId
+ * @access Public
+ */
+const getOrdersByTelegramId = async (req, res) => {
+  try {
+    const { telegramId } = req.params;
+    
+    if (!telegramId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Telegram ID обязателен'
+      });
+    }
+    
+    // Находим пользователя по Telegram ID
+    const user = await User.findOne({
+      where: { 
+        telegram_id: telegramId.toString() 
+      }
+    });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Пользователь с таким Telegram ID не найден'
+      });
+    }
+    
+    // Получаем заказы пользователя
+    const orders = await Order.findAll({
+      where: { user_id: user.id },
+      include: [
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Flower,
+              as: 'flower',
+              attributes: ['id', 'name', 'price', 'image_url']
+            }
+          ]
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+    
+    // Преобразуем заказы для ответа
+    const formattedOrders = orders.map(order => {
+      const orderData = order.toJSON();
+      
+      // Добавляем текстовое описание статуса
+      const statusMapping = {
+        1: 'Новый',
+        2: 'В обработке',
+        3: 'Отправлен',
+        4: 'Доставлен',
+        5: 'Отменен'
+      };
+      
+      orderData.status_text = statusMapping[orderData.status_id] || 'Неизвестно';
+      
+      // Рассчитываем общее количество товаров
+      orderData.total_items = orderData.items.reduce((sum, item) => sum + item.quantity, 0);
+      
+      return orderData;
+    });
+    
+    return res.status(200).json({
+      success: true,
+      orders: formattedOrders,
+      user: {
+        id: user.id,
+        telegram_id: user.telegram_id,
+        name: user.getName ? user.getName() : (user.first_name + ' ' + (user.last_name || '')).trim()
+      }
+    });
+  } catch (error) {
+    console.error('Ошибка при получении заказов по Telegram ID:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка сервера при получении заказов пользователя'
+    });
+  }
+};
+
 module.exports = {
   getAllOrders,
   getOrderById,
   getUserOrders,
   createOrder,
   updateOrderStatus,
-  deleteOrder
+  deleteOrder,
+  getOrdersByTelegramId
 };

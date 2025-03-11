@@ -697,6 +697,82 @@ const telegramAuth = async (req, res) => {
   }
 };
 
+/**
+ * Регистрация пользователя через Telegram
+ * @route POST /api/users/telegram-register
+ * @access Public
+ */
+const telegramRegister = async (req, res) => {
+  try {
+    const { telegram_id, first_name, last_name, username } = req.body;
+    
+    // Проверка обязательных полей
+    if (!telegram_id) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Telegram ID обязателен' 
+      });
+    }
+    
+    // Проверяем, существует ли пользователь с таким telegram_id
+    const existingUser = await User.findOne({ 
+      where: { telegram_id: telegram_id.toString() } 
+    });
+    
+    if (existingUser) {
+      return res.status(409).json({ 
+        success: false, 
+        message: 'Пользователь с таким Telegram ID уже зарегистрирован',
+        user: {
+          id: existingUser.id,
+          telegram_id: existingUser.telegram_id,
+          username: existingUser.username,
+          first_name: existingUser.first_name,
+          last_name: existingUser.last_name
+        }
+      });
+    }
+    
+    // Создаем пользователя
+    const user = await User.create({
+      telegram_id: telegram_id.toString(),
+      first_name,
+      last_name,
+      username,
+      telegram_data: JSON.stringify({
+        registration_date: new Date(),
+        registration_source: 'telegram_bot'
+      }),
+      is_active: true
+    });
+    
+    // Генерируем токен
+    const token = user.generateToken();
+    
+    // Логируем успешную регистрацию
+    console.log(`Новый пользователь зарегистрирован через Telegram: ${telegram_id}`);
+    
+    return res.status(201).json({
+      success: true,
+      message: 'Пользователь успешно зарегистрирован через Telegram',
+      user: {
+        id: user.id,
+        telegram_id: user.telegram_id,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name
+      },
+      token
+    });
+  } catch (error) {
+    console.error('Ошибка при регистрации пользователя через Telegram:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка сервера при регистрации пользователя через Telegram'
+    });
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -707,5 +783,6 @@ module.exports = {
   checkSession,
   getProfile,
   refreshToken,
-  telegramAuth
+  telegramAuth,
+  telegramRegister
 };

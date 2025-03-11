@@ -3,6 +3,7 @@ const router = express.Router();
 const { authMiddleware, adminMiddleware } = require('../middlewares/auth');
 const models = require('../models');
 const User = models.user;
+const { telegramRegister } = require('../controllers/auth');
 
 /**
  * @route GET /users
@@ -247,5 +248,12 @@ router.get('/:id/orders', authMiddleware, async (req, res) => {
     });
   }
 });
+
+/**
+ * @route POST /api/users/telegram-register
+ * @desc Регистрация пользователя через Telegram
+ * @access Public
+ */
+router.post('/telegram-register', telegramRegister);
 
 module.exports = router; 

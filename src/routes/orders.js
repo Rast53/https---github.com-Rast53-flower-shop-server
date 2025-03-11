@@ -9,11 +9,15 @@ const {
   getUserOrders,
   createOrder,
   updateOrderStatus,
-  deleteOrder 
+  deleteOrder,
+  getOrdersByTelegramId
 } = require('../controllers/orders');
 
 // Публичные маршруты для создания заказов
 router.post('/', createOrder);
+
+// Добавляем маршрут для получения заказов по Telegram ID
+router.get('/telegram/:telegramId', getOrdersByTelegramId);
 
 // Маршруты для аутентифицированных пользователей
 router.get('/user', authMiddleware, getUserOrders);

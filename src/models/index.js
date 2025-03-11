@@ -35,7 +35,7 @@ Object.keys(models).forEach(modelName => {
 });
 
 models.sequelize = db;
-models.Sequelize = Sequelize;
+models.sequelize_library = Sequelize;
 
 // Проверка имен всех моделей в логах
 console.log('Имена моделей после загрузки:', Object.keys(models));
